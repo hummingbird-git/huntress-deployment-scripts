@@ -1,6 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env zsh
 
-# Copyright (c) 2022 Huntress Labs, Inc.
+# Copyright (c) 2024 Huntress Labs, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -32,7 +32,7 @@
 # hard coded below or passed in when the script is run.
 
 # For more details, see our KB article
-# https://support.huntress.io/hc/en-us/articles/4404005189011-Installing-the-Huntress-Agent
+# https://support.huntress.io/hc/en-us/articles/25013857741331-Critical-Steps-for-Complete-macOS-EDR-Deployment
 
 
 ##############################################################################
@@ -51,9 +51,18 @@ defaultOrgKey="Mac Agents"
 # are being used to deploy the Huntress macOS Agent. Simply replace the text in quotes below.
 rmm="Unspecified RMM"
 
+# Option to install the system extension after the Huntress Agent is installed. In order for this to happen
+# without security prompts on the endpoint, permissions need to be applied to the endpoint by an MDM before this script
+# is run. See the following KB article for instructions:
+# https://support.huntress.io/hc/en-us/articles/21286543756947-Instructions-for-the-MDM-Configuration-for-macOS
+install_system_extension=false
+
 ##############################################################################
 ## Do not modify anything below this line
 ##############################################################################
+
+scriptVersion="August 15, 2024"
+
 dd=$(date "+%Y%m%d-%H%M%S")
 log_file="/tmp/HuntressInstaller.log"
 install_script="/tmp/HuntressMacInstall.sh"
@@ -66,6 +75,8 @@ logger() {
     echo "$dd -- $*";
     echo "$dd -- $*" >> $log_file;
 }
+
+logger "Huntress install script last updated $scriptVersion"
 
 # Check for root
 if [ $EUID -ne 0 ]; then
@@ -92,12 +103,14 @@ Usage: $0 [options...] --account_key=<account_key> --organization_key=<organizat
 
 -a, --account_key      <account_key>      The account key to use for this agent install
 -o, --organization_key <organization_key> The org key to use for this agent install
+-t, --tags             <tags>             A comma-separated list of agent tags
+-i, --install_system_extension            If passed, automatically install the system extension
 -h, --help                                Print this message
 
 EOF
 }
 
-while getopts a:o:h:-: OPT; do
+while getopts a:o:h:t:-:i OPT; do
   if [ "$OPT" = "-" ]; then
     OPT="${OPTARG%%=*}"       # extract long option name
     OPTARG="${OPTARG#$OPT}"   # extract long option argument (may be empty)
@@ -112,6 +125,12 @@ while getopts a:o:h:-: OPT; do
         ;;
     o | organization_key)
         organization_key="$OPTARG"
+        ;;
+    t | tags)
+        tags="$OPTARG"
+        ;;
+    i | install_system_extension)
+        install_system_extension=true
         ;;
     h | help)
         usage
@@ -130,39 +149,50 @@ shift $((OPTIND-1)) # remove parsed options and args from $@ list
 logger "=========== INSTALL START AT $dd ==============="
 logger "=========== $rmm Deployment Script | Version: $version ==============="
 
-# VALIDATE OPTIONS PASSED TO SCRIPT
+# validate options passed to script, remove all invalid characters except spaces are converted to dash
 if [ -z "$organization_key" ]; then
-    organizationKey=$(echo "$defaultOrgKey" | xargs)
-    logger "--organization_key parameter not present, using defaultOrgKey instead: $defaultOrgKey"
+    organizationKey=$(echo "$defaultOrgKey" | tr -dc '[:alnum:]- ' | tr ' ' '-' | xargs)
+    logger "--organization_key parameter not present, using defaultOrgKey instead: $defaultOrgKey, formatted to $organizationKey "
   else
-    organizationKey=$(echo "$organization_key" | xargs)
-    logger "--organization_key parameter present, set to: $organizationKey"
+    organizationKey=$(echo "$organization_key" | tr -dc '[:alnum:]- ' | tr ' ' '-' | xargs)
+    logger "--organization_key parameter present, set to: $organization_key, formatted to $organizationKey "
 fi
 
 if ! [[ "$account_key" =~ $pattern ]]; then
     logger "Invalid --account_key provided, checking defaultAccountKey..."
     accountKey=$(echo "$defaultAccountKey" | xargs)
     if ! [[ $accountKey =~ $pattern ]]; then
-        logger "ERROR: Invalid --account_key. Please check Huntress support documentation."
+        # account key is invalid if script gets to this branch, so write the key unmasked for troubleshooting
+        logger "ERROR: Invalid --account_key, $accountKey was provided. Please check Huntress support documentation."
         exit 1
     fi
     else
         accountKey=$(echo "$account_key" | xargs)
 fi
 
-# OPTIONS REQUIRED
+if [ -n "$tags" ]; then
+  logger "using tags: $tags"
+fi
+
+if [ "$install_system_extension" = true ]; then
+  logger "automatically installing system extension"
+fi
+
+# Hide most of the account key in the logs, keeping the front and tail end for troubleshooting
+masked="$(echo "${accountKey:0:4}")"
+masked+="************************"
+masked+="$(echo "${accountKey: (-4)}")"
+
+# OPTIONS REQUIRED (account key could be invalid in this branch, so mask it)
 if [ -z "$accountKey" ] || [ -z "$organizationKey" ]
 then
     logger "Error: --account_key and --organization_key are both required" >> $log_file
+    logger "Account key: $masked and Org Key: $organizationKey were provided"
     echo
     usage
     exit 1
 fi
 
-# Hide most of the account key in the logs, keeping the front and tail end for troubleshooting 
-masked="$(echo "${accountKey:0:4}")"
-masked+="************************"
-masked+="$(echo "${accountKey: (-4)}")"
 
 logger "Provided Huntress key: $masked"
 logger "Provided Organization Key: $organizationKey"
@@ -179,7 +209,12 @@ if grep -Fq "$invalid_key" "$install_script"; then
    exit 1
 fi
 
-install_result="$(/bin/bash "$install_script" -a "$accountKey" -o "$organizationKey" -v)"
+if [ "$install_system_extension" = true ]; then
+    install_result="$(/bin/bash "$install_script" -a "$accountKey" -o "$organizationKey" -t "$tags" -v --install_system_extension)"
+else
+    install_result="$(/bin/bash "$install_script" -a "$accountKey" -o "$organizationKey" -t "$tags" -v)"
+fi
+
 logger "=============== Begin Installer Logs ==============="
 
 if [ $? != "0" ]; then

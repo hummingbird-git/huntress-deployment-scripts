@@ -1,7 +1,7 @@
 #!/bin/bash
 #shellcheck disable=SC2181,SC2295,SC2116
 
-# Copyright (c) 2023 Huntress Labs, Inc.
+# Copyright (c) 2024 Huntress Labs, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -33,13 +33,13 @@
 # hard coded below or passed in when the script is run.
 
 # For more details, see our KB article
-# https://support.huntress.io/hc/en-us/articles/4404005189011-Installing-the-Huntress-Agent
+# https://support.huntress.io/hc/en-us/articles/25013857741331-Critical-Steps-for-Complete-macOS-EDR-Deployment
 
 
 #####################################################################################
-## 
+##
 ## Begin user modified variables. Modify per documentation before running in Addigy.
-## 
+##
 #####################################################################################
 
 
@@ -50,6 +50,12 @@ defaultAccountKey="__ACCOUNT_KEY__"
 # If you have a preferred "placeholder" organization name for Mac agents, you can set that below.
 defaultOrgKey="__ORGANIZATION_KEY__"
 
+# Option to install the system extension after the Huntress Agent is installed. In order for this to happen
+# without security prompts on the endpoint, permissions need to be applied to the endpoint by Addigy before this script
+# is run. See the following KB article for more information:
+# https://support.huntress.io/hc/en-us/articles/21286543756947-Instructions-for-the-MDM-Configuration-for-macOS
+install_system_extension=false
+
 ##############################################################################
 ## In many multitenant environments, the Top-Level Addigy Policy name
 ## matches the name of each Organization. If you wish to dynamically use the
@@ -59,7 +65,7 @@ defaultOrgKey="__ORGANIZATION_KEY__"
 ## For this method, comment line 51 above and uncomment lines 62-63 below.
 ##############################################################################
 
-# topLevelPolicy=$(echo ${POLICY_PATH} | awk -F ' \\| ' '{print $1}') 
+# topLevelPolicy=$(echo ${POLICY_PATH} | awk -F ' \\| ' '{print $1}')
 # defaultOrgKey="$topLevelPolicy"
 
 ##############################################################################
@@ -89,6 +95,13 @@ fi
 if [ -f "$install_script" ]; then
     logger "Installer file present in /tmp; deleting."
     rm -f "$install_script"
+fi
+
+# Log policy path if Addigy policies are being. Useful for troubleshooting
+if [ -n "$topLevelPolicy" ]; then
+    logger "Policy Path: ${POLICY_PATH}"
+    logger "Policy Path (base64): $(echo ${POLICY_PATH} | base64)"
+    logger "Top Level Policy: $topLevelPolicy"
 fi
 
 ##
@@ -171,7 +184,7 @@ then
     exit 1
 fi
 
-# Hide most of the account key in the logs, keeping the front and tail end for troubleshooting 
+# Hide most of the account key in the logs, keeping the front and tail end for troubleshooting
 masked="$(echo "${accountKey:0:4}")"
 masked+="************************"
 masked+="$(echo "${accountKey: (-4)}")"
@@ -191,8 +204,12 @@ if grep -Fq "$invalid_key" "$install_script"; then
    exit 1
 fi
 
-install_result="$(/bin/bash "$install_script" -a "$accountKey" -o "$organizationKey" -v)"
 logger "=============== Begin Installer Logs ==============="
+if [ "$install_system_extension" = true ]; then
+    install_result="$(/bin/bash "$install_script" -a "$accountKey" -o "$organizationKey" -v --install_system_extension)"
+else
+    install_result="$(/bin/bash "$install_script" -a "$accountKey" -o "$organizationKey" -v)"
+fi
 
 if [ $? != "0" ]; then
     logger "Installer Error: $install_result"
